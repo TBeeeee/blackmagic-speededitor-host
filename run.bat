@@ -1,0 +1,1 @@
+cmd /k "python ./Jianying-beta.py"
