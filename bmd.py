@@ -7,6 +7,12 @@ import binascii
 import enum
 import struct
 import sys
+import os
+import platform
+
+if platform.system() == 'Windows':
+	import ctypes
+	ctypes.CDLL(os.path.dirname(os.path.abspath(__file__)) + './hidapi/x64/hidapi.dll')
 
 from typing import List
 
@@ -103,9 +109,10 @@ class SpeedEditorLed(enum.IntFlag):
 # The LEDs for the Jog mode button are on a different system ...
 # Setting those leds is done with SET_REPORT on Output Report ID 4
 # which takes a single 8 bits bitfield of the LEDs to enable
+# Notice: the NONE mode is only used to turn off the LEDS when exiting
 
 class SpeedEditorJogLed(enum.IntFlag):
-
+	NONE		= (0 <<  1)
 	JOG			= (1 <<  0)
 	SHTL		= (1 <<  1)
 	SCRL		= (1 <<  2)
@@ -206,7 +213,11 @@ class SpeedEditor:
 	USB_PID			= 0xda0e
 
 	def __init__(self):
-		self.dev = hid.Device(self.USB_VID, self.USB_PID)
+		try:
+			self.dev = hid.Device(self.USB_VID, self.USB_PID)
+		except hid.HIDException as e:
+			print(e)
+			exit()
 
 	def authenticate(self):
 		# The authentication is performed over SET_FEATURE/GET_FEATURE on
@@ -248,13 +259,18 @@ class SpeedEditor:
 		self.handler = handler
 
 	def set_leds(self, leds : SpeedEditorLed):
-		self.dev.write(struct.pack('<BI', 2, leds))
+		if leds is not None:
+			self.dev.write(struct.pack('<BI', 2, leds))
 
 	def set_jog_leds(self, jogleds : SpeedEditorJogLed):
-		self.dev.write(struct.pack('<BB', 4, jogleds))
+		if jogleds is not None:
+			self.dev.write(struct.pack('<BB', 4, jogleds))
 
 	def set_jog_mode(self, jogmode : SpeedEditorJogMode, unknown=255):
 		self.dev.write(struct.pack('<BBIB', 3, jogmode, 0, unknown))
+        
+	def close_handler(self):
+		self.dev.close()
 
 	def _parse_report_03(self, report):
 		# Report ID 03
@@ -262,13 +278,14 @@ class SpeedEditor:
 		# u8   - Jog mode
 		# le32 - Jog value (signed)
 		# u8   - Unknown ?
-		rid, jm, jv, ju = struct.unpack('<BBiB', report)
+		rid, jm, jv, ju = struct.unpack('<BBiB', report[0:7])
 		return self.handler.jog(SpeedEditorJogMode(jm), jv)
 
 	def _parse_report_04(self, report):
 		# Report ID 04
 		# u8      - Report ID
 		# le16[6] - Array of keys held down
+		# print(report)
 		keys = [SpeedEditorKey(k) for k in struct.unpack('<6H', report[1:]) if k != 0]
 		return self.handler.key(keys)
 
@@ -277,7 +294,7 @@ class SpeedEditor:
 		# u8 - Report ID
 		# u8 - Charging (1) / Not-charging (0)
 		# u8 - Battery level (0-100)
-		rid, bs, bl = struct.unpack('<BBB', report)
+		rid, bs, bl = struct.unpack('<BBB', report[0:3])
 		return self.handler.battery(bool(bs), bl)
 
 	def poll(self, timeout=None):
